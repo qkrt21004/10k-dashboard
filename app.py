@@ -581,7 +581,7 @@ def render_section(data, key, title_bar, cols_bar, title_line, cols_line, chg_la
 st.sidebar.title("📊 Dashboard")
 page = st.sidebar.radio(
     "페이지",
-    ["10-K 분석", "SOTP 밸류에이션"],
+    ["10-K 분석", "SOTP 밸류에이션", "Consumer & Retail"],
     label_visibility="collapsed",
 )
 st.sidebar.divider()
@@ -801,6 +801,15 @@ if page == "SOTP 밸류에이션":
                          for t, v in peer_data.items()]
             st.dataframe(pd.DataFrame(peer_rows), use_container_width=True, hide_index=True)
 
+    st.stop()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PAGE: Consumer & Retail
+# ═══════════════════════════════════════════════════════════════════════════════
+if page == "Consumer & Retail":
+    st.title("🛒 Consumer & Retail")
+    st.caption("소비재·유통 업종 전용 분석 대시보드")
+    st.info("🚧 준비 중입니다.")
     st.stop()
 
 # ═══════════════════════════════════════════════════════════════════════════════
