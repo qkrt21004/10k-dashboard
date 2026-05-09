@@ -243,6 +243,11 @@ CONCEPTS = {
                 "PaymentsForCapitalImprovements",
                 "PaymentsToAcquireOtherPropertyPlantAndEquipment"],
     "eps":     ["EarningsPerShareDiluted", "EarningsPerShareBasic"],
+    "sga":     ["SellingGeneralAndAdministrativeExpense",
+                "SellingAndMarketingExpense"],
+    "da":      ["DepreciationDepletionAndAmortization",
+                "DepreciationAndAmortization",
+                "Depreciation"],
 }
 
 
@@ -804,12 +809,397 @@ if page == "SOTP 밸류에이션":
     st.stop()
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# CONSUMER & RETAIL HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=86400)
+def cr_get_operational_kpis(ticker: str, company_name: str) -> dict:
+    api_key = _secret("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {}
+    client = anthropic.Anthropic(api_key=api_key)
+    prompt = f"""You are a financial analyst specializing in consumer retail (grocery, warehouse, discount retail, food & beverage).
+
+For {company_name} ({ticker}), return operational KPIs based on the most recent publicly available annual report.
+Return a JSON object — no markdown, raw JSON only — with these fields:
+
+- "sss_growth_pct": Same-Store Sales growth % most recent fiscal year (number or null)
+- "sss_trend": array of {{"year": int, "value": float}} for last 4 fiscal years (empty array if unavailable)
+- "membership_count_m": total membership count in millions (number or null)
+- "membership_growth_pct": YoY membership growth % (number or null)
+- "membership_fee_revenue_b": membership fee revenue in billions USD (number or null)
+- "ecomm_penetration_pct": e-commerce as % of total sales (number or null)
+- "private_label_margin_pct": private label as % of total gross margin (number or null)
+- "total_sqft_m": total retail square footage in millions sq ft (number or null)
+- "store_count": total number of stores (integer or null)
+- "fiscal_year": the fiscal year this data refers to (string, e.g. "FY2024")
+- "notes": one sentence of important context (string)
+
+If a metric is not applicable or not publicly disclosed, use null. Return ONLY valid JSON."""
+
+    resp = client.messages.create(
+        model="claude-opus-4-7",
+        max_tokens=900,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = resp.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = "\n".join(raw.split("\n")[1:])
+        if raw.endswith("```"):
+            raw = raw[:raw.rfind("```")]
+    return json.loads(raw)
+
+
+def _margin_line(fig, series, name, color):
+    if series.dropna().empty:
+        return
+    fig.add_trace(go.Scatter(
+        x=series.index.astype(str), y=series.values,
+        name=name, mode="lines+markers",
+        line=dict(color=color, width=2),
+    ))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # PAGE: Consumer & Retail
 # ═══════════════════════════════════════════════════════════════════════════════
 if page == "Consumer & Retail":
     st.title("🛒 Consumer & Retail")
-    st.caption("소비재·유통 업종 전용 분석 대시보드")
-    st.info("🚧 준비 중입니다.")
+    st.caption("Grocery · Warehouse · Discount Retail · Food & Beverage | KPI 전용 분석")
+
+    all_tickers_cr = load_all_tickers()
+    with st.form("cr_search"):
+        c1, c2 = st.columns([4, 1])
+        sel_cr = c1.selectbox("티커 검색", options=all_tickers_cr,
+                              index=None, placeholder="티커 또는 회사명 입력 (예: COST, WMT, KR...)")
+        go_cr = c2.form_submit_button("분석", type="primary", use_container_width=True)
+
+    if go_cr and sel_cr:
+        st.session_state["cr_ticker"]  = sel_cr.split(" – ")[0].strip()
+        st.session_state["cr_company"] = sel_cr.split(" – ")[1].strip() if " – " in sel_cr else sel_cr
+        st.session_state.pop("cr_ops", None)
+
+    if "cr_ticker" not in st.session_state:
+        st.stop()
+
+    cr_ticker  = st.session_state["cr_ticker"]
+    cr_company = st.session_state["cr_company"]
+    st.markdown(f"### {cr_company} ({cr_ticker})")
+
+    # ── 주가 차트 ────────────────────────────────────────────────────────────
+    CR_RANGE = {"상장 이후": "max", "10년": "10y", "5년": "5y", "1년": "1y", "1개월": "1mo"}
+    cr_range_sel = st.radio("기간", list(CR_RANGE.keys()), horizontal=True,
+                             label_visibility="collapsed", key="cr_range")
+    with st.spinner("주가 로딩 중..."):
+        cr_price_df = fetch_price(cr_ticker, CR_RANGE[cr_range_sel])
+    if not cr_price_df.empty:
+        fig_crp = price_chart(cr_price_df, cr_ticker, cr_company)
+        if fig_crp:
+            st.plotly_chart(fig_crp, use_container_width=True)
+
+    st.divider()
+
+    # ── 데이터 로드 ──────────────────────────────────────────────────────────
+    with st.spinner("재무 데이터 로딩 중..."):
+        cr_cik, _ = get_cik(cr_ticker)
+        if cr_cik:
+            cr_facts = get_xbrl_facts(cr_cik)
+            cr_data  = build_annual(cr_facts, 10)
+            # SG&A / D&A (annual, $M)
+            cr_sga = extract_annual(cr_facts, CONCEPTS["sga"]).tail(10) / 1e6
+            cr_da  = extract_annual(cr_facts, CONCEPTS["da"]).tail(10)  / 1e6
+        else:
+            cr_facts, cr_data, cr_sga, cr_da = {}, {}, pd.Series(dtype=float), pd.Series(dtype=float)
+
+    with st.spinner("밸류에이션 데이터 로딩 중..."):
+        cr_val = fetch_valuation(cr_ticker)
+        try:
+            cr_info   = yf.Ticker(cr_ticker).info
+            cr_mktcap = cr_info.get("marketCap") or 0
+            cr_ev     = cr_info.get("enterpriseValue") or 0
+        except Exception:
+            cr_mktcap = cr_ev = 0
+
+    tab_ops, tab_fin, tab_val = st.tabs([
+        "📊 Operational Metrics",
+        "💰 Financial Metrics",
+        "📐 Valuation Metrics",
+    ])
+
+    # ────────────────────────────────────────────────────────────────────────
+    # TAB 1 · OPERATIONAL METRICS
+    # ────────────────────────────────────────────────────────────────────────
+    with tab_ops:
+        col_hd, col_btn = st.columns([5, 1])
+        col_hd.caption("⚠️ Claude AI 기반 추정치입니다. 최신 공시자료로 반드시 확인하세요.")
+        if col_btn.button("🔄 재분석", key="cr_reanalyze"):
+            cr_get_operational_kpis.clear()
+            st.session_state.pop("cr_ops", None)
+            st.rerun()
+
+        if "cr_ops" not in st.session_state:
+            with st.spinner("Claude가 운영 지표를 분석 중..."):
+                try:
+                    st.session_state["cr_ops"] = cr_get_operational_kpis(cr_ticker, cr_company)
+                except Exception as e:
+                    st.warning(f"운영 지표 로딩 실패: {e}")
+                    st.session_state["cr_ops"] = {}
+
+        ops = st.session_state.get("cr_ops", {})
+        fy_label = ops.get("fiscal_year", "")
+
+        # ── 핵심 지표 그리드 ────────────────────────────────────────────────
+        st.subheader(f"핵심 지표 {('— ' + fy_label) if fy_label else ''}")
+
+        def _m(label, val, suffix="", delta=None, delta_suffix=""):
+            disp = f"{val}{suffix}" if val is not None else "N/A"
+            d    = f"{delta}{delta_suffix}" if delta is not None else None
+            return label, disp, d
+
+        r1c1, r1c2, r1c3 = st.columns(3)
+        sss   = ops.get("sss_growth_pct")
+        r1c1.metric("Same-Store Sales Growth", f"{sss:+.1f}%" if sss is not None else "N/A")
+
+        mem   = ops.get("membership_count_m")
+        mem_g = ops.get("membership_growth_pct")
+        r1c2.metric("Membership Count",
+                    f"{mem:.1f}M" if mem is not None else "N/A",
+                    delta=f"{mem_g:+.1f}%" if mem_g is not None else None)
+
+        mem_fee = ops.get("membership_fee_revenue_b")
+        r1c3.metric("Membership Fee Revenue",
+                    f"${mem_fee:.2f}B" if mem_fee is not None else "N/A")
+
+        r2c1, r2c2, r2c3 = st.columns(3)
+        ecomm = ops.get("ecomm_penetration_pct")
+        r2c1.metric("E-commerce Penetration", f"{ecomm:.1f}%" if ecomm is not None else "N/A")
+
+        pl = ops.get("private_label_margin_pct")
+        r2c2.metric("Private Label (% Margin)", f"{pl:.1f}%" if pl is not None else "N/A")
+
+        stores = ops.get("store_count")
+        sqft   = ops.get("total_sqft_m")
+        r2c3.metric("Store Count",
+                    f"{stores:,}" if stores is not None else "N/A",
+                    delta=f"{sqft:.1f}M sq ft total" if sqft is not None else None)
+
+        # ── SSS 트렌드 차트 ─────────────────────────────────────────────────
+        sss_trend = ops.get("sss_trend", [])
+        if sss_trend:
+            sss_df = pd.DataFrame(sss_trend).dropna().sort_values("year")
+            fig_sss = go.Figure(go.Bar(
+                x=sss_df["year"].astype(str), y=sss_df["value"],
+                marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in sss_df["value"]],
+                text=[f"{v:+.1f}%" for v in sss_df["value"]], textposition="outside",
+            ))
+            fig_sss.update_layout(
+                title="Same-Store Sales Growth (%) — Trend",
+                yaxis_ticksuffix="%", height=300,
+                plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="white",
+            )
+            st.plotly_chart(fig_sss, use_container_width=True)
+
+        if ops.get("notes"):
+            st.info(f"📝 {ops['notes']}")
+
+        # ── 정성적 평가 입력 ─────────────────────────────────────────────────
+        st.divider()
+        st.subheader("정성적 평가 메모")
+        qa, qb = st.columns(2)
+        with qa:
+            st.text_area("Vendor Relationships",
+                         placeholder="공급업체 협상력, 조달 효율성, 공급망 관리...", height=90, key="cr_vendor")
+            st.text_area("Price Investments",
+                         placeholder="가격 경쟁력 투자 여부, 마진 희생 전략...", height=90, key="cr_price")
+        with qb:
+            st.text_area("Loyalty Programs",
+                         placeholder="고객 충성도 프로그램, 재구매율, 생태계 강점...", height=90, key="cr_loyalty")
+            st.text_area("Market Share Trend",
+                         placeholder="업종 내 점유율 변화, 경쟁 환경...", height=90, key="cr_mktshare")
+
+    # ────────────────────────────────────────────────────────────────────────
+    # TAB 2 · FINANCIAL METRICS
+    # ────────────────────────────────────────────────────────────────────────
+    with tab_fin:
+        inc = cr_data.get("income", pd.DataFrame())
+        bal = cr_data.get("balance", pd.DataFrame())
+        cf  = cr_data.get("cashflow", pd.DataFrame())
+
+        if inc.empty:
+            st.warning("XBRL 재무 데이터를 가져올 수 없습니다.")
+        else:
+            # ── 마진 트렌드 ─────────────────────────────────────────────────
+            rev = inc.get("Revenue")
+            if rev is not None and not rev.dropna().empty:
+                fig_mgn = go.Figure()
+                if "Gross Profit" in inc:
+                    _margin_line(fig_mgn, (inc["Gross Profit"] / rev * 100), "Gross Margin %", COLORS[0])
+                if "Operating Income" in inc:
+                    _margin_line(fig_mgn, (inc["Operating Income"] / rev * 100), "Operating Margin %", COLORS[1])
+                if "Net Income" in inc:
+                    _margin_line(fig_mgn, (inc["Net Income"] / rev * 100), "Net Margin %", COLORS[2])
+                fig_mgn.update_layout(
+                    title="Margin Trends (%)", yaxis_ticksuffix="%", height=320,
+                    plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="white",
+                    legend=dict(orientation="h", y=-0.2),
+                )
+                st.plotly_chart(fig_mgn, use_container_width=True)
+
+            # ── COGS & SG&A ($M) ────────────────────────────────────────────
+            fa, fb = st.columns(2)
+            with fa:
+                if "Revenue" in inc and "Gross Profit" in inc:
+                    cogs = (inc["Revenue"] - inc["Gross Profit"]).dropna()
+                    fig_cogs = go.Figure(go.Bar(
+                        x=cogs.index.astype(str), y=cogs.values,
+                        marker_color=COLORS[3], name="COGS",
+                    ))
+                    if not cr_sga.dropna().empty:
+                        fig_cogs.add_bar(
+                            x=cr_sga.dropna().index.astype(str), y=cr_sga.dropna().values,
+                            marker_color=COLORS[4], name="SG&A",
+                        )
+                    fig_cogs.update_layout(
+                        title="COGS & SG&A ($M)", barmode="group", height=300,
+                        plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="white",
+                    )
+                    st.plotly_chart(fig_cogs, use_container_width=True)
+
+            with fb:
+                # ── EBITDA 추정 ─────────────────────────────────────────────
+                if "Operating Income" in inc and not cr_da.dropna().empty:
+                    ebitda_est = inc["Operating Income"].add(cr_da, fill_value=0).dropna()
+                    fig_ebitda = go.Figure(go.Bar(
+                        x=ebitda_est.index.astype(str), y=ebitda_est.values,
+                        marker_color=COLORS[1], name="EBITDA (est.)",
+                    ))
+                    fig_ebitda.update_layout(
+                        title="EBITDA Estimate ($M)", height=300,
+                        plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="white",
+                    )
+                    st.plotly_chart(fig_ebitda, use_container_width=True)
+
+            # ── FCF 트렌드 ──────────────────────────────────────────────────
+            if not cf.empty and "Free Cash Flow" in cf.columns:
+                fcf_s = cf["Free Cash Flow"].dropna()
+                if not fcf_s.empty:
+                    fig_fcf = go.Figure(go.Bar(
+                        x=fcf_s.index.astype(str), y=fcf_s.values,
+                        marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in fcf_s.values],
+                    ))
+                    fig_fcf.update_layout(
+                        title="Free Cash Flow ($M)", height=280,
+                        plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="white",
+                    )
+                    st.plotly_chart(fig_fcf, use_container_width=True)
+
+            # ── Net Debt / EBITDA ───────────────────────────────────────────
+            if not bal.empty and "Total Debt" in bal.columns and "Cash & Equiv." in bal.columns:
+                nd = (bal["Total Debt"] - bal["Cash & Equiv."]).dropna()
+                if not nd.empty and not cr_da.dropna().empty and "Operating Income" in inc:
+                    ebitda_latest = (inc["Operating Income"].add(cr_da, fill_value=0)).dropna()
+                    if not ebitda_latest.empty:
+                        nd_ebitda = (nd / ebitda_latest).dropna()
+                        if not nd_ebitda.empty:
+                            fig_lev = go.Figure(go.Bar(
+                                x=nd_ebitda.index.astype(str), y=nd_ebitda.values,
+                                marker_color=["#22c55e" if v < 2 else "#facc15" if v < 3.5 else "#ef4444"
+                                              for v in nd_ebitda.values],
+                                text=[f"{v:.2f}x" for v in nd_ebitda.values], textposition="outside",
+                            ))
+                            fig_lev.update_layout(
+                                title="Net Debt / EBITDA (Net Leverage)",
+                                height=280, yaxis_title="x",
+                                plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="white",
+                            )
+                            st.plotly_chart(fig_lev, use_container_width=True)
+
+            # ── 수치 테이블 ─────────────────────────────────────────────────
+            st.subheader("연간 재무 수치 ($M)")
+            show_cols = [c for c in ["Revenue", "Gross Profit", "Operating Income", "Net Income"]
+                         if c in inc.columns]
+            if show_cols:
+                disp = inc[show_cols].copy()
+                disp.index = disp.index.astype(str)
+                st.dataframe(
+                    disp.style.format(lambda v: fmt(v) if pd.notna(v) else "—"),
+                    use_container_width=True,
+                )
+
+    # ────────────────────────────────────────────────────────────────────────
+    # TAB 3 · VALUATION METRICS
+    # ────────────────────────────────────────────────────────────────────────
+    with tab_val:
+        # ── 표준 벨류에이션 ─────────────────────────────────────────────────
+        if cr_val:
+            mkt = cr_val.get("_market_cap")
+            ev  = cr_val.get("_ev")
+            vc1, vc2 = st.columns(2)
+            if mkt: vc1.metric("Market Cap",        f"${mkt/1e9:,.1f}B")
+            if ev:  vc2.metric("Enterprise Value",  f"${ev/1e9:,.1f}B")
+            valuation_table({cr_ticker: cr_val})
+
+        # ── FCF Yield ────────────────────────────────────────────────────────
+        cf2 = cr_data.get("cashflow", pd.DataFrame())
+        if not cf2.empty and "Free Cash Flow" in cf2.columns and cr_mktcap:
+            fcf_lat = cf2["Free Cash Flow"].dropna()
+            if not fcf_lat.empty:
+                fcf_yield = (fcf_lat.iloc[-1] * 1e6) / cr_mktcap * 100
+                st.metric("FCF Yield", f"{fcf_yield:.2f}%",
+                          help="FCF (latest FY) ÷ Market Cap")
+
+        # ── EPS Growth 추이 ──────────────────────────────────────────────────
+        cr_eps = cr_data.get("eps", pd.Series(dtype=float))
+        if not cr_eps.dropna().empty:
+            fig_eps = go.Figure(go.Bar(
+                x=cr_eps.dropna().index.astype(str), y=cr_eps.dropna().values,
+                marker_color=COLORS[0],
+                text=[f"${v:.2f}" for v in cr_eps.dropna().values], textposition="outside",
+            ))
+            fig_eps.update_layout(
+                title="EPS (Diluted) — Annual Trend",
+                height=280, yaxis_tickprefix="$",
+                plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="white",
+            )
+            st.plotly_chart(fig_eps, use_container_width=True)
+
+        # ── Per Square Foot Metrics ──────────────────────────────────────────
+        st.divider()
+        st.subheader("Per Square Foot Metrics")
+        ops2   = st.session_state.get("cr_ops", {})
+        sqft_m = ops2.get("total_sqft_m")
+
+        sqft_input = st.number_input(
+            "총 매장 면적 (백만 sq ft)",
+            value=float(sqft_m) if sqft_m else 0.0,
+            min_value=0.0, step=0.1,
+            help="Claude 추정치. 최신 연간보고서로 확인하세요.",
+            key="cr_sqft",
+        )
+
+        cf3  = cr_data.get("cashflow", pd.DataFrame())
+        inc3 = cr_data.get("income",  pd.DataFrame())
+
+        if sqft_input > 0 and not inc3.empty and not cf3.empty:
+            sqft_total = sqft_input * 1e6
+            psf1, psf2 = st.columns(2)
+
+            # OpEx PSF = (Revenue - Operating Income) / sqft
+            if "Revenue" in inc3.columns and "Operating Income" in inc3.columns:
+                opex_lat = (inc3["Revenue"] - inc3["Operating Income"]).dropna()
+                if not opex_lat.empty:
+                    opex_psf = (opex_lat.iloc[-1] * 1e6) / sqft_total
+                    psf1.metric("OpEx per Sq Ft", f"${opex_psf:.2f}")
+
+            # CapEx PSF = CapEx / sqft
+            if "CapEx" in cf3.columns:
+                capex_lat = cf3["CapEx"].dropna()
+                if not capex_lat.empty:
+                    capex_psf = (abs(capex_lat.iloc[-1]) * 1e6) / sqft_total
+                    psf2.metric("CapEx per Sq Ft", f"${capex_psf:.2f}")
+        else:
+            st.info("매장 면적을 입력하면 OpEx PSF · CapEx PSF가 자동 계산됩니다.")
+
     st.stop()
 
 # ═══════════════════════════════════════════════════════════════════════════════
