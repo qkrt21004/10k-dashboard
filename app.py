@@ -809,11 +809,11 @@ if page == "SOTP 밸류에이션":
     st.stop()
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CONSUMER & RETAIL HELPERS
+# CONSUMER & RETAIL HELPERS (deprecated, kept for compatibility)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=86400)
-def cr_get_operational_kpis(ticker: str, company_name: str) -> dict:
+def cr_get_operational_kpis_DEPRECATED(ticker: str, company_name: str) -> dict:
     api_key = _secret("ANTHROPIC_API_KEY")
     if not api_key:
         return {}
@@ -861,9 +861,205 @@ def _margin_line(fig, series, name, color):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PAGE: Consumer & Retail
+# PAGE: Consumer & Retail (수동 입력 템플릿)
 # ═══════════════════════════════════════════════════════════════════════════════
 if page == "Consumer & Retail":
+    st.title("🛒 Consumer & Retail")
+    st.caption("Grocery · Warehouse · Discount Retail · Food & Beverage | KPI 분석 템플릿")
+
+    # 회사 정보
+    cc1, cc2, cc3 = st.columns([2, 2, 1])
+    co_name   = cc1.text_input("회사명", placeholder="예: Costco Wholesale")
+    co_ticker = cc2.text_input("티커", placeholder="예: COST")
+    co_fy     = cc3.text_input("회계연도", placeholder="FY2024")
+
+    st.divider()
+
+    tab_ops, tab_fin, tab_val, tab_qual = st.tabs([
+        "📊 Operational",
+        "💰 Financial",
+        "📐 Valuation",
+        "📝 Qualitative",
+    ])
+
+    # ────────────────────────────────────────────────────────────────────────
+    # TAB 1 · OPERATIONAL METRICS
+    # ────────────────────────────────────────────────────────────────────────
+    with tab_ops:
+        st.markdown("##### 경쟁력 · 고객행동 · 운영효율 지표")
+
+        o1, o2, o3 = st.columns(3)
+        o1.number_input("Same-Store Sales Growth (%)", value=None, format="%.2f",
+                        placeholder="예: 5.4", key="op_sss",
+                        help="기존 매장 성장률 (신규 매장 제외) — 실수요·운영력의 핵심 지표")
+        o2.number_input("Market Share (%)", value=None, format="%.2f",
+                        placeholder="예: 12.3", key="op_mktshare",
+                        help="업종 내 시장점유율")
+        o3.number_input("Market Share Δ (bps, YoY)", value=None, format="%.1f",
+                        placeholder="예: +30", key="op_mktshare_d",
+                        help="전년 대비 시장점유율 변동")
+
+        st.markdown("---")
+        st.markdown("##### Membership / Subscription")
+        m1, m2, m3 = st.columns(3)
+        m1.number_input("Membership Count (M)", value=None, format="%.2f",
+                        placeholder="예: 73.4", key="op_mem_cnt")
+        m2.number_input("Membership Growth (%)", value=None, format="%.2f",
+                        placeholder="예: 7.6", key="op_mem_grow")
+        m3.number_input("Membership Fee Revenue ($B)", value=None, format="%.3f",
+                        placeholder="예: 4.83", key="op_mem_fee",
+                        help="멤버십 수수료 매출 — 안정적·고마진")
+
+        ren1, ren2 = st.columns(2)
+        ren1.number_input("Renewal Rate — Domestic (%)", value=None, format="%.1f",
+                          placeholder="예: 92.9", key="op_renew_dom")
+        ren2.number_input("Renewal Rate — Global (%)", value=None, format="%.1f",
+                          placeholder="예: 90.4", key="op_renew_glb")
+
+        st.markdown("---")
+        st.markdown("##### Channel & Product Mix")
+        ch1, ch2, ch3 = st.columns(3)
+        ch1.number_input("E-commerce Penetration (% of Sales)", value=None, format="%.2f",
+                        placeholder="예: 7.5", key="op_ecomm")
+        ch2.number_input("Private Label (% of Total Sales)", value=None, format="%.2f",
+                        placeholder="예: 25.0", key="op_pl_sales")
+        ch3.number_input("Private Label (% of Total Margin)", value=None, format="%.2f",
+                        placeholder="예: 33.0", key="op_pl_margin",
+                        help="자체브랜드 마진 기여도 — 마진·고객충성도 향상")
+
+        st.markdown("---")
+        st.markdown("##### Footprint")
+        f1, f2, f3 = st.columns(3)
+        f1.number_input("Store Count", value=None, format="%d",
+                        placeholder="예: 890", step=1, key="op_stores")
+        f2.number_input("Total Square Footage (M sq ft)", value=None, format="%.2f",
+                        placeholder="예: 130.5", key="op_sqft")
+        f3.number_input("New Stores (FY)", value=None, format="%d",
+                        placeholder="예: 28", step=1, key="op_new_stores")
+
+    # ────────────────────────────────────────────────────────────────────────
+    # TAB 2 · FINANCIAL METRICS
+    # ────────────────────────────────────────────────────────────────────────
+    with tab_fin:
+        st.markdown("##### 수익성 · 비용구조 · 레버리지 · 현금창출")
+
+        # 1. P&L
+        st.markdown("**Profit & Loss ($M)**")
+        p1, p2, p3, p4 = st.columns(4)
+        p1.number_input("Revenue",          value=None, format="%.1f", key="fin_rev",   placeholder="예: 254,453")
+        p2.number_input("Gross Profit",     value=None, format="%.1f", key="fin_gross", placeholder="예: 32,071")
+        p3.number_input("Operating Income", value=None, format="%.1f", key="fin_op",    placeholder="예: 9,285")
+        p4.number_input("Net Income",       value=None, format="%.1f", key="fin_ni",    placeholder="예: 7,367")
+
+        # 2. Margins
+        st.markdown("**Margins (%)**")
+        mg1, mg2, mg3, mg4 = st.columns(4)
+        mg1.number_input("Gross Margin",     value=None, format="%.2f", key="fin_gm",  placeholder="예: 12.61")
+        mg2.number_input("Operating Margin", value=None, format="%.2f", key="fin_om",  placeholder="예: 3.65")
+        mg3.number_input("EBITDA Margin",    value=None, format="%.2f", key="fin_ebm", placeholder="예: 4.78")
+        mg4.number_input("Net Margin",       value=None, format="%.2f", key="fin_nm",  placeholder="예: 2.90")
+
+        # 3. Cost structure
+        st.markdown("**Cost Structure ($M)**")
+        c1, c2, c3 = st.columns(3)
+        c1.number_input("COGS",                       value=None, format="%.1f", key="fin_cogs", placeholder="예: 222,382")
+        c2.number_input("SG&A",                       value=None, format="%.1f", key="fin_sga",  placeholder="예: 22,810")
+        c3.number_input("Depreciation & Amortization", value=None, format="%.1f", key="fin_da",   placeholder="예: 2,855")
+
+        # 4. EBITDA & Adj EBITDA
+        st.markdown("**EBITDA ($M)**")
+        e1, e2 = st.columns(2)
+        e1.number_input("EBITDA",          value=None, format="%.1f", key="fin_ebitda",     placeholder="예: 12,140")
+        e2.number_input("Adjusted EBITDA", value=None, format="%.1f", key="fin_adj_ebitda", placeholder="예: 12,500")
+
+        # 5. Leverage & Per-share
+        st.markdown("**Leverage & Per-share**")
+        l1, l2, l3, l4 = st.columns(4)
+        l1.number_input("Total Debt ($M)",      value=None, format="%.1f", key="fin_debt",   placeholder="예: 7,866")
+        l2.number_input("Cash & Equiv. ($M)",   value=None, format="%.1f", key="fin_cash",   placeholder="예: 11,140")
+        l3.number_input("Net Debt / EBITDA (x)", value=None, format="%.2f", key="fin_lev",    placeholder="예: -0.27")
+        l4.number_input("EPS (Diluted, $)",      value=None, format="%.2f", key="fin_eps",    placeholder="예: 16.56")
+
+        # 6. Cash flow
+        st.markdown("**Cash Flow ($M)**")
+        cf1, cf2, cf3 = st.columns(3)
+        cf1.number_input("Operating Cash Flow", value=None, format="%.1f", key="fin_ocf",   placeholder="예: 11,339")
+        cf2.number_input("CapEx",               value=None, format="%.1f", key="fin_capex", placeholder="예: 4,063")
+        cf3.number_input("Free Cash Flow",      value=None, format="%.1f", key="fin_fcf",   placeholder="예: 7,276")
+
+    # ────────────────────────────────────────────────────────────────────────
+    # TAB 3 · VALUATION METRICS
+    # ────────────────────────────────────────────────────────────────────────
+    with tab_val:
+        st.markdown("##### 멀티플 · 성장률 · 효율성")
+
+        # Multiples
+        st.markdown("**Trading Multiples**")
+        v1, v2, v3, v4 = st.columns(4)
+        v1.number_input("P/E (TTM)",     value=None, format="%.2f", key="val_pe",    placeholder="예: 55.4")
+        v2.number_input("Forward P/E",   value=None, format="%.2f", key="val_fpe",   placeholder="예: 48.2")
+        v3.number_input("EV/EBITDA",     value=None, format="%.2f", key="val_evebitda", placeholder="예: 32.1")
+        v4.number_input("EV/Revenue",    value=None, format="%.2f", key="val_evrev", placeholder="예: 1.6")
+
+        # Growth & yield
+        st.markdown("**Growth & Yield**")
+        g1, g2, g3 = st.columns(3)
+        g1.number_input("EPS Growth (YoY, %)", value=None, format="%.2f", key="val_eps_grow", placeholder="예: 14.2")
+        g2.number_input("Revenue Growth (YoY, %)", value=None, format="%.2f", key="val_rev_grow", placeholder="예: 5.0")
+        g3.number_input("FCF Yield (%)",       value=None, format="%.3f", key="val_fcf_yield", placeholder="예: 1.62")
+
+        # Per Square Foot
+        st.markdown("**Per Square Foot**")
+        psf1, psf2, psf3 = st.columns(3)
+        psf1.number_input("Sales PSF ($)",  value=None, format="%.1f", key="val_sales_psf", placeholder="예: 1,950")
+        psf2.number_input("OpEx PSF ($)",   value=None, format="%.2f", key="val_opex_psf",  placeholder="예: 1,879.5")
+        psf3.number_input("CapEx PSF ($)",  value=None, format="%.2f", key="val_capex_psf", placeholder="예: 31.1")
+
+        # Market data
+        st.markdown("**Market Data**")
+        mk1, mk2, mk3 = st.columns(3)
+        mk1.number_input("Market Cap ($B)",      value=None, format="%.1f", key="val_mktcap", placeholder="예: 408")
+        mk2.number_input("Enterprise Value ($B)", value=None, format="%.1f", key="val_ev",     placeholder="예: 405")
+        mk3.number_input("Current Price ($)",     value=None, format="%.2f", key="val_price",  placeholder="예: 920.50")
+
+    # ────────────────────────────────────────────────────────────────────────
+    # TAB 4 · QUALITATIVE
+    # ────────────────────────────────────────────────────────────────────────
+    with tab_qual:
+        st.markdown("##### 정성적 평가")
+        st.caption("수치로 잡히지 않는 경쟁우위·리스크·전략 메모")
+
+        st.text_area("🤝 Vendor Relationships",
+                     placeholder="공급업체 관계, 협상력, 머천다이징 역량, 조달 효율성, 공급망 관리 품질...",
+                     height=110, key="q_vendor")
+
+        st.text_area("🎯 Loyalty Programs",
+                     placeholder="고객 충성도 프로그램 구조, 재구매율, 생태계 강점...",
+                     height=110, key="q_loyalty")
+
+        st.text_area("💵 Price Investments",
+                     placeholder="단기 마진을 희생하면서 장기 가격 경쟁력에 투자하는 전략 여부...",
+                     height=110, key="q_price")
+
+        st.text_area("📦 Inventory Management",
+                     placeholder="재고회전율, SKU 관리, 신선식품 비중·폐기율, 재고 관련 risk...",
+                     height=110, key="q_inventory")
+
+        st.text_area("🏆 Long-term Competitive Advantages",
+                     placeholder="해자(moat), 규모의 경제, 브랜드 파워, 입지·물류 인프라, 진입장벽...",
+                     height=110, key="q_moat")
+
+        st.text_area("⚠️ Key Risks",
+                     placeholder="규제·노조·관세·주요 공급사 의존도·소비둔화 리스크...",
+                     height=110, key="q_risks")
+
+    st.stop()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PAGE: Consumer & Retail (구버전 - 자동계산)
+# ═══════════════════════════════════════════════════════════════════════════════
+if False and page == "Consumer & Retail":
     st.title("🛒 Consumer & Retail")
     st.caption("Grocery · Warehouse · Discount Retail · Food & Beverage | KPI 전용 분석")
 
