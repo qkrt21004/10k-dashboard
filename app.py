@@ -557,7 +557,7 @@ def show_table(df, chg_label, eps=None):
             if isinstance(v, str) and v.startswith("+"): return "color: #22c55e"
             if isinstance(v, str) and v.startswith("-"): return "color: #ef4444"
             return ""
-        st.dataframe(pct_disp.style.applymap(color), use_container_width=True)
+        st.dataframe(pct_disp.style.map(color), use_container_width=True)
 
 
 def render_section(data, key, title_bar, cols_bar, title_line, cols_line, chg_label, x_label, eps=None):
