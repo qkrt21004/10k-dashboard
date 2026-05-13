@@ -42,6 +42,43 @@ def get_xbrl_facts(cik: str) -> dict:
     return r.json().get("facts", {}).get("us-gaap", {})
 
 
+@st.cache_data(ttl=86400)
+def get_filings(cik: str, form_types: tuple = ("10-K", "10-Q"), limit: int = 10) -> list:
+    """Fetch recent filings (10-K / 10-Q) with links to SEC EDGAR."""
+    try:
+        r = requests.get(
+            f"https://data.sec.gov/submissions/CIK{cik}.json",
+            headers=HEADERS, timeout=30,
+        )
+        data   = r.json()
+        recent = data.get("filings", {}).get("recent", {})
+        forms          = recent.get("form", [])
+        dates          = recent.get("filingDate", [])
+        accessions     = recent.get("accessionNumber", [])
+        primary_docs   = recent.get("primaryDocument", [])
+        report_dates   = recent.get("reportDate", [])
+
+        cik_int = str(int(cik))
+        result = []
+        for i, form in enumerate(forms):
+            if form not in form_types:
+                continue
+            acc_clean = accessions[i].replace("-", "")
+            link = f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{acc_clean}/{primary_docs[i]}"
+            result.append({
+                "form":         form,
+                "filed":        dates[i],
+                "period":       report_dates[i] if i < len(report_dates) else "",
+                "accession":    accessions[i],
+                "link":         link,
+            })
+            if len(result) >= limit:
+                break
+        return result
+    except Exception:
+        return []
+
+
 # ── 공통 유틸 ─────────────────────────────────────────────────────────────────
 
 def _find_fy_end(quarter_end: pd.Timestamp, fy_ends: list) -> pd.Timestamp | None:
@@ -1434,6 +1471,7 @@ if submitted and ticker:
 
     st.session_state["result"] = {
         "ticker": ticker, "company_name": company_name,
+        "cik": cik,
         "data": data, "is_qtr": is_qtr,
         "x_label": x_label, "chg_label": chg_label,
     }
@@ -1448,6 +1486,39 @@ if "result" in st.session_state:
     chg_label  = r["chg_label"]
 
     st.success(f"**{company_name}** ({ticker}) — {'분기' if is_qtr else '연간'} 로드 완료")
+
+    # ── SEC Filings (10-K / 10-Q 링크) ────────────────────────────────────────
+    cik_for_filings = r.get("cik")
+    if cik_for_filings:
+        filings = get_filings(cik_for_filings, form_types=("10-K", "10-Q"), limit=12)
+        if filings:
+            with st.expander(f"📄 SEC Filings — {ticker} (최근 10-K / 10-Q)", expanded=False):
+                tens_k = [f for f in filings if f["form"] == "10-K"][:5]
+                tens_q = [f for f in filings if f["form"] == "10-Q"][:5]
+                colk, colq = st.columns(2)
+                with colk:
+                    st.markdown("**📘 10-K (Annual)**")
+                    if tens_k:
+                        for f in tens_k:
+                            st.markdown(
+                                f"- [{f['period'] or f['filed']}]({f['link']}) · "
+                                f"<span style='color:#888'>filed {f['filed']}</span>",
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.caption("— 없음 —")
+                with colq:
+                    st.markdown("**📗 10-Q (Quarterly)**")
+                    if tens_q:
+                        for f in tens_q:
+                            st.markdown(
+                                f"- [{f['period'] or f['filed']}]({f['link']}) · "
+                                f"<span style='color:#888'>filed {f['filed']}</span>",
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.caption("— 없음 —")
+                st.caption(f"전체 filings: [SEC EDGAR에서 보기](https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik_for_filings}&type=10-K&dateb=&owner=include&count=40)")
 
     # ── 주가 차트 ──────────────────────────────────────────────────────────────
     st.subheader("주가")
